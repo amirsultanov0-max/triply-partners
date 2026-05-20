@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { supabase } from "../supabase.js";
+import { useState, useEffect, useRef } from "react";
+import { supabase, SUPABASE_URL } from "../supabase.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { toast } from "sonner";
 
@@ -29,7 +29,7 @@ const EMPTY_FORM = {
   price_per_person: "", duration_hours: "",
   max_group_size: 12, min_group_size: 1,
   meeting_point: "", includes: "", excludes: "",
-  languages: ["English"], city_id: "",
+  languages: ["English"], city_id: "", cover_url: "",
 };
 
 const inp = {
@@ -51,7 +51,9 @@ const ToursPage = () => {
   const [view, setView] = useState("list"); // "list" | "create" | "edit"
   const [editTour, setEditTour] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const coverInputRef = useRef(null);
 
   const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -69,6 +71,34 @@ const ToursPage = () => {
   useEffect(() => { if (operator) loadTours(); }, [operator]);
 
   const resetForm = () => setForm(EMPTY_FORM);
+
+  const handleCoverUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/"))
+      return toast.error("Please select an image file");
+    if (file.size > 5 * 1024 * 1024)
+      return toast.error("Image must be under 5MB");
+
+    setUploading(true);
+    const ext = file.name.split(".").pop();
+    const fname = `${operator.id}-${Date.now()}.${ext}`;
+
+    const { error } = await supabase.storage
+      .from("tour-covers")
+      .upload(fname, file, { upsert: true });
+
+    if (error) {
+      toast.error("Upload failed: " + error.message);
+      setUploading(false);
+      return;
+    }
+
+    const url = `${SUPABASE_URL}/storage/v1/object/public/tour-covers/${fname}`;
+    setForm(f => ({ ...f, cover_url: url }));
+    setUploading(false);
+    toast.success("Photo uploaded ✓");
+  };
 
   const saveTour = async () => {
     if (!form.title.trim())        return toast.error("Title is required");
@@ -91,6 +121,7 @@ const ToursPage = () => {
       excludes:        form.excludes ? form.excludes.split("\n").filter(Boolean) : [],
       languages:       form.languages,
       city_id:         form.city_id,
+      cover_url:       form.cover_url || null,
       status:          "pending",
     };
 
@@ -121,6 +152,7 @@ const ToursPage = () => {
       excludes:        (tour.excludes || []).join("\n"),
       languages:       tour.languages || ["English"],
       city_id:         tour.city_id || "",
+      cover_url:       tour.cover_url || "",
     });
     setEditTour(tour);
     setView("edit");
@@ -301,6 +333,77 @@ const ToursPage = () => {
             borderRadius: 16, overflow: "hidden",
           }}>
             <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+              {/* Cover photo */}
+              <div>
+                <label style={lbl}>Cover photo</label>
+                <div
+                  onClick={() => coverInputRef.current?.click()}
+                  style={{
+                    width: "100%", height: 200,
+                    borderRadius: 10, overflow: "hidden",
+                    border: "0.5px dashed var(--border)",
+                    background: form.cover_url ? "transparent" : "var(--bg)",
+                    display: "flex", alignItems: "center",
+                    justifyContent: "center", cursor: "pointer",
+                    position: "relative", marginBottom: 8,
+                  }}
+                >
+                  {form.cover_url ? (
+                    <>
+                      <img
+                        src={form.cover_url}
+                        alt="Cover"
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      />
+                      <div
+                        style={{
+                          position: "absolute", inset: 0,
+                          background: "rgba(0,0,0,0.4)",
+                          display: "flex", alignItems: "center",
+                          justifyContent: "center", opacity: 0,
+                          transition: "opacity 0.2s",
+                          color: "white", fontSize: 13, fontWeight: 500,
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+                        onMouseLeave={e => { e.currentTarget.style.opacity = 0; }}
+                      >
+                        Change photo
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ textAlign: "center", color: "var(--text-tertiary)" }}>
+                      <div style={{ fontSize: 32, marginBottom: 8 }}>📷</div>
+                      <div style={{ fontSize: 13 }}>
+                        {uploading ? "Uploading…" : "Click to upload cover photo"}
+                      </div>
+                      <div style={{ fontSize: 11, marginTop: 4 }}>
+                        JPG, PNG or WebP · Max 5MB
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={coverInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleCoverUpload}
+                  style={{ display: "none" }}
+                />
+                {form.cover_url && (
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, cover_url: "" }))}
+                    style={{
+                      fontSize: 12, color: "var(--red)",
+                      background: "none", border: "none",
+                      cursor: "pointer", padding: 0, fontFamily: "inherit",
+                    }}
+                  >
+                    Remove photo
+                  </button>
+                )}
+              </div>
 
               {/* Title */}
               <div>
