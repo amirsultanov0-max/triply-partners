@@ -74,20 +74,40 @@ const ApplyPage = () => {
     if (!user) return toast.error("Please sign in first");
 
     setSubmitting(true);
-    const { error } = await supabase
+    const { data: existing } = await supabase
       .from("operators")
-      .upsert({
-        user_id: user.id,
-        company_name: form.company_name.trim(),
-        contact_name: form.contact_name.trim(),
-        phone: form.phone.trim(),
-        email: form.email.trim(),
-        bio: form.bio.trim(),
-        website: form.website.trim(),
-        languages: form.languages,
-        status: "pending",
-        rejection_note: null,
-      }, { onConflict: "user_id" });
+      .select("id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    const { error } = existing
+      ? await supabase
+          .from("operators")
+          .update({
+            company_name: form.company_name.trim(),
+            contact_name: form.contact_name.trim(),
+            phone: form.phone.trim(),
+            email: form.email.trim(),
+            bio: form.bio.trim(),
+            website: form.website.trim(),
+            languages: form.languages,
+            status: "pending",
+            rejection_note: null,
+          })
+          .eq("user_id", user.id)
+      : await supabase
+          .from("operators")
+          .insert({
+            user_id: user.id,
+            company_name: form.company_name.trim(),
+            contact_name: form.contact_name.trim(),
+            phone: form.phone.trim(),
+            email: form.email.trim(),
+            bio: form.bio.trim(),
+            website: form.website.trim(),
+            languages: form.languages,
+            status: "pending",
+          });
 
     setSubmitting(false);
     if (error) return toast.error(error.message);
