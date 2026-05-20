@@ -9,6 +9,26 @@ const LANGUAGES = [
   "German", "French", "Spanish", "Chinese", "Arabic",
 ];
 
+const inputStyle = {
+  width: "100%", padding: "10px 14px",
+  border: "0.5px solid var(--border)", borderRadius: 8,
+  fontSize: 14, outline: "none", boxSizing: "border-box",
+  background: "var(--white)", color: "var(--text-primary)",
+};
+
+const Field = ({ label, required, children }) => (
+  <div style={{ marginBottom: 20 }}>
+    <label style={{
+      display: "block", fontSize: 13, fontWeight: 500,
+      color: "var(--text-primary)", marginBottom: 6,
+    }}>
+      {label}{required &&
+        <span style={{ color: "var(--olive)", marginLeft: 2 }}>*</span>}
+    </label>
+    {children}
+  </div>
+);
+
 const ApplyPage = () => {
   const { user, operator, reloadOperator } = useAuth();
   const navigate = useNavigate();
@@ -74,26 +94,6 @@ const ApplyPage = () => {
     await reloadOperator();
     setStep("success");
   };
-
-  const inputStyle = {
-    width: "100%", padding: "10px 14px",
-    border: "0.5px solid var(--border)", borderRadius: 8,
-    fontSize: 14, outline: "none", boxSizing: "border-box",
-    background: "var(--white)", color: "var(--text-primary)",
-  };
-
-  const Field = ({ label, required, children }) => (
-    <div style={{ marginBottom: 20 }}>
-      <label style={{
-        display: "block", fontSize: 13, fontWeight: 500,
-        color: "var(--text-primary)", marginBottom: 6,
-      }}>
-        {label}{required &&
-          <span style={{ color: "var(--olive)", marginLeft: 2 }}>*</span>}
-      </label>
-      {children}
-    </div>
-  );
 
   return (
     <div style={{ maxWidth: 600, margin: "0 auto", padding: "40px 24px" }}>
