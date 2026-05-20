@@ -19,9 +19,33 @@ export const AuthProvider = ({ children }) => {
   };
 
   useEffect(() => {
+    let realtimeChannel = null;
+
+    const subscribeToOperator = (userId) => {
+      if (!userId) return;
+      if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+
+      realtimeChannel = supabase
+        .channel(`operator-status-${userId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "operators",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            setOperator(payload.new);
+          }
+        )
+        .subscribe();
+    };
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       loadOperator(session?.user?.id);
+      subscribeToOperator(session?.user?.id);
       setLoading(false);
     });
 
@@ -29,10 +53,14 @@ export const AuthProvider = ({ children }) => {
       (_event, session) => {
         setUser(session?.user ?? null);
         loadOperator(session?.user?.id);
+        subscribeToOperator(session?.user?.id);
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+    };
   }, []);
 
   const signOut = async () => {

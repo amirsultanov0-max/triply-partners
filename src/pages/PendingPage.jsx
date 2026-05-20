@@ -1,8 +1,14 @@
+import { useEffect } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
-import { Link } from "react-router-dom";
 
 export default function PendingPage() {
   const { operator } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (operator?.status === "approved") navigate("/dashboard");
+  }, [operator?.status]);
 
   return (
     <div style={{ maxWidth: 480, margin: "0 auto", padding: "60px 24px" }}>
