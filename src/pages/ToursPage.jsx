@@ -30,6 +30,11 @@ const EMPTY_FORM = {
   max_group_size: 12, min_group_size: 1,
   meeting_point: "", includes: "", excludes: "",
   languages: ["English"], city_id: "", cover_url: "",
+  cancellation_policy: "Cancel up to 24 hours in advance for a full refund.",
+  itinerary: [],
+  additional_info: [],
+  accessibility: [],
+  what_to_bring: [],
 };
 
 const inp = {
@@ -57,6 +62,7 @@ const ToursPage = () => {
   const [tourPhotos, setTourPhotos] = useState([]);
   const [photosLoading, setPhotosLoading] = useState(false);
   const photoInputRef = useRef(null);
+  const [newStop, setNewStop] = useState({ title: "", description: "", duration: "" });
 
   const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -209,10 +215,15 @@ const ToursPage = () => {
       meeting_point:    form.meeting_point.trim(),
       includes:         form.includes ? form.includes.split("\n").filter(Boolean) : [],
       excludes:         form.excludes ? form.excludes.split("\n").filter(Boolean) : [],
-      languages:        form.languages,
-      city_id:          form.city_id,
-      cover_url:        form.cover_url || null,
-      status:           "pending",
+      languages:           form.languages,
+      city_id:             form.city_id,
+      cover_url:           form.cover_url || null,
+      cancellation_policy: form.cancellation_policy.trim(),
+      itinerary:           form.itinerary,
+      additional_info:     form.additional_info.filter(Boolean),
+      accessibility:       form.accessibility.filter(Boolean),
+      what_to_bring:       form.what_to_bring.filter(Boolean),
+      status:              "pending",
     };
 
     const { data: savedTour, error } = editTour
@@ -252,9 +263,14 @@ const ToursPage = () => {
       meeting_point:    tour.meeting_point || "",
       includes:         (tour.includes || []).join("\n"),
       excludes:         (tour.excludes || []).join("\n"),
-      languages:        tour.languages || ["English"],
-      city_id:          tour.city_id || "",
-      cover_url:        tour.cover_url || "",
+      languages:           tour.languages || ["English"],
+      city_id:             tour.city_id || "",
+      cover_url:           tour.cover_url || "",
+      cancellation_policy: tour.cancellation_policy || "Cancel up to 24 hours in advance for a full refund.",
+      itinerary:           tour.itinerary || [],
+      additional_info:     tour.additional_info || [],
+      accessibility:       tour.accessibility || [],
+      what_to_bring:       tour.what_to_bring || [],
     });
     setEditTour(tour);
     setFormTab("details");
@@ -541,6 +557,174 @@ const ToursPage = () => {
                       rows={4}
                       style={{ ...inp, fontSize: 13, resize: "vertical" }} />
                   </div>
+                </div>
+
+                {/* Cancellation policy */}
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 6 }}>
+                    Cancellation policy
+                  </label>
+                  <select
+                    value={form.cancellation_policy}
+                    onChange={e => setForm(f => ({ ...f, cancellation_policy: e.target.value }))}
+                    style={{ width: "100%", padding: "10px 14px",
+                      border: "0.5px solid var(--border)", borderRadius: 8,
+                      fontSize: 14, outline: "none", background: "var(--white)",
+                      boxSizing: "border-box", fontFamily: "inherit" }}
+                  >
+                    {[
+                      "Cancel up to 24 hours in advance for a full refund.",
+                      "Cancel up to 48 hours in advance for a full refund.",
+                      "Cancel up to 3 days in advance for a full refund.",
+                      "Cancel up to 7 days in advance for a full refund.",
+                      "Non-refundable — no cancellations accepted.",
+                    ].map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+
+                {/* Itinerary */}
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 8 }}>
+                    Itinerary (optional)
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400, marginLeft: 6 }}>
+                      Add stops in order
+                    </span>
+                  </label>
+
+                  {form.itinerary.map((stop, i) => (
+                    <div key={i} style={{
+                      background: "var(--bg)", borderRadius: 8,
+                      padding: "12px 14px", marginBottom: 8,
+                      border: "0.5px solid var(--border)",
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 500 }}>
+                            {i + 1}. {stop.title}
+                            {stop.duration && (
+                              <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: 8 }}>
+                                · {stop.duration}
+                              </span>
+                            )}
+                          </div>
+                          {stop.description && (
+                            <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 3 }}>
+                              {stop.description}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, itinerary: f.itinerary.filter((_, j) => j !== i) }))}
+                          style={{ background: "none", border: "none", cursor: "pointer",
+                            color: "var(--red)", fontSize: 16, padding: "0 0 0 12px" }}
+                        >✕</button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div style={{ border: "0.5px dashed var(--border)", borderRadius: 8, padding: "12px 14px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 8, marginBottom: 8 }}>
+                      <input
+                        value={newStop.title}
+                        onChange={e => setNewStop(s => ({ ...s, title: e.target.value }))}
+                        placeholder="Stop name (e.g. Registan Square)"
+                        style={{ padding: "8px 12px", border: "0.5px solid var(--border)",
+                          borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box",
+                          fontFamily: "inherit" }}
+                      />
+                      <input
+                        value={newStop.duration}
+                        onChange={e => setNewStop(s => ({ ...s, duration: e.target.value }))}
+                        placeholder="Duration"
+                        style={{ padding: "8px 12px", border: "0.5px solid var(--border)",
+                          borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box",
+                          fontFamily: "inherit" }}
+                      />
+                    </div>
+                    <textarea
+                      value={newStop.description}
+                      onChange={e => setNewStop(s => ({ ...s, description: e.target.value }))}
+                      placeholder="Brief description of this stop (optional)"
+                      rows={2}
+                      style={{ width: "100%", padding: "8px 12px", border: "0.5px solid var(--border)",
+                        borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box",
+                        resize: "none", marginBottom: 8, fontFamily: "inherit" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newStop.title.trim()) return;
+                        setForm(f => ({ ...f, itinerary: [...f.itinerary, { ...newStop }] }));
+                        setNewStop({ title: "", description: "", duration: "" });
+                      }}
+                      style={{ padding: "7px 16px", background: "var(--olive)", color: "white",
+                        border: "none", borderRadius: 6, fontSize: 13, cursor: "pointer",
+                        fontFamily: "inherit" }}
+                    >
+                      + Add stop
+                    </button>
+                  </div>
+                </div>
+
+                {/* Additional info */}
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 8 }}>
+                    Additional information
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400, marginLeft: 6 }}>
+                      One item per line
+                    </span>
+                  </label>
+                  <textarea
+                    value={form.additional_info.join("\n")}
+                    onChange={e => setForm(f => ({ ...f, additional_info: e.target.value.split("\n") }))}
+                    placeholder={"Confirmation will be received at time of booking\nNot wheelchair accessible\nNear public transportation\nMost travelers can participate"}
+                    rows={4}
+                    style={{ width: "100%", padding: "10px 14px",
+                      border: "0.5px solid var(--border)", borderRadius: 8,
+                      fontSize: 13, outline: "none", boxSizing: "border-box",
+                      resize: "vertical", lineHeight: 1.6, fontFamily: "inherit" }}
+                  />
+                </div>
+
+                {/* Accessibility */}
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 8 }}>
+                    Accessibility
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400, marginLeft: 6 }}>
+                      One item per line
+                    </span>
+                  </label>
+                  <textarea
+                    value={form.accessibility.join("\n")}
+                    onChange={e => setForm(f => ({ ...f, accessibility: e.target.value.split("\n") }))}
+                    placeholder={"Wheelchair accessible\nStroller accessible\nService animals allowed"}
+                    rows={3}
+                    style={{ width: "100%", padding: "10px 14px",
+                      border: "0.5px solid var(--border)", borderRadius: 8,
+                      fontSize: 13, outline: "none", boxSizing: "border-box",
+                      resize: "vertical", lineHeight: 1.6, fontFamily: "inherit" }}
+                  />
+                </div>
+
+                {/* What to bring */}
+                <div style={{ marginBottom: 20 }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 8 }}>
+                    What to bring
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 400, marginLeft: 6 }}>
+                      One item per line
+                    </span>
+                  </label>
+                  <textarea
+                    value={form.what_to_bring.join("\n")}
+                    onChange={e => setForm(f => ({ ...f, what_to_bring: e.target.value.split("\n") }))}
+                    placeholder={"Comfortable walking shoes\nSunscreen\nWater bottle\nPassport or ID"}
+                    rows={3}
+                    style={{ width: "100%", padding: "10px 14px",
+                      border: "0.5px solid var(--border)", borderRadius: 8,
+                      fontSize: 13, outline: "none", boxSizing: "border-box",
+                      resize: "vertical", lineHeight: 1.6, fontFamily: "inherit" }}
+                  />
                 </div>
 
                 {/* Languages */}
