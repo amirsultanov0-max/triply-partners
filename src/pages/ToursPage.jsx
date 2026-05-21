@@ -53,7 +53,10 @@ const ToursPage = () => {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
-  const coverInputRef = useRef(null);
+  const [formTab, setFormTab] = useState("details"); // "details" | "photos"
+  const [tourPhotos, setTourPhotos] = useState([]);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const photoInputRef = useRef(null);
 
   const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -70,34 +73,121 @@ const ToursPage = () => {
 
   useEffect(() => { if (operator) loadTours(); }, [operator]);
 
-  const resetForm = () => setForm(EMPTY_FORM);
+  const resetForm = () => {
+    setForm(EMPTY_FORM);
+    setFormTab("details");
+    setTourPhotos([]);
+  };
 
-  const handleCoverUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/"))
-      return toast.error("Please select an image file");
-    if (file.size > 5 * 1024 * 1024)
-      return toast.error("Image must be under 5MB");
+  const loadTourPhotos = async (tourId) => {
+    setPhotosLoading(true);
+    const { data } = await supabase
+      .from("tour_photos")
+      .select("*")
+      .eq("tour_id", tourId)
+      .order("display_order", { ascending: true });
+    setTourPhotos(data || []);
+    setPhotosLoading(false);
+  };
 
-    setUploading(true);
-    const ext = file.name.split(".").pop();
-    const fname = `${operator.id}-${Date.now()}.${ext}`;
+  const handlePhotoUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
 
-    const { error } = await supabase.storage
-      .from("tour-covers")
-      .upload(fname, file, { upsert: true });
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error(`${file.name} is too large (max 5MB)`);
+        continue;
+      }
 
-    if (error) {
-      toast.error("Upload failed: " + error.message);
+      setUploading(true);
+      const ext = file.name.split(".").pop();
+      const fname = `${operator.id}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+      const { error } = await supabase.storage
+        .from("tour-covers")
+        .upload(fname, file, { upsert: true });
+
+      if (error) {
+        toast.error("Upload failed: " + error.message);
+        setUploading(false);
+        continue;
+      }
+
+      const url = `${SUPABASE_URL}/storage/v1/object/public/tour-covers/${fname}`;
+      const isFirst = tourPhotos.length === 0;
+
+      if (editTour) {
+        const { data: newPhoto } = await supabase
+          .from("tour_photos")
+          .insert({
+            tour_id: editTour.id,
+            url,
+            is_cover: isFirst,
+            display_order: tourPhotos.length,
+          })
+          .select()
+          .single();
+
+        if (newPhoto) {
+          setTourPhotos(prev => [...prev, newPhoto]);
+          if (isFirst) {
+            setForm(f => ({ ...f, cover_url: url }));
+            await supabase.from("tours").update({ cover_url: url }).eq("id", editTour.id);
+          }
+        }
+      } else {
+        setTourPhotos(prev => [
+          ...prev,
+          { id: Date.now(), url, is_cover: isFirst, display_order: prev.length, temp: true },
+        ]);
+        if (isFirst) setForm(f => ({ ...f, cover_url: url }));
+      }
       setUploading(false);
-      return;
     }
 
-    const url = `${SUPABASE_URL}/storage/v1/object/public/tour-covers/${fname}`;
-    setForm(f => ({ ...f, cover_url: url }));
-    setUploading(false);
     toast.success("Photo uploaded ✓");
+    if (photoInputRef.current) photoInputRef.current.value = "";
+  };
+
+  const setHeroPhoto = async (photo) => {
+    await supabase.from("tour_photos")
+      .update({ is_cover: false })
+      .eq("tour_id", editTour?.id || photo.tour_id);
+    await supabase.from("tour_photos")
+      .update({ is_cover: true })
+      .eq("id", photo.id);
+
+    const tourId = editTour?.id;
+    if (tourId) {
+      await supabase.from("tours").update({ cover_url: photo.url }).eq("id", tourId);
+      setForm(f => ({ ...f, cover_url: photo.url }));
+    }
+    setTourPhotos(prev => prev.map(p => ({ ...p, is_cover: p.id === photo.id })));
+    toast.success("Hero photo updated ✓");
+  };
+
+  const deletePhoto = async (photo) => {
+    if (!window.confirm("Delete this photo?")) return;
+
+    if (!photo.temp) {
+      await supabase.from("tour_photos").delete().eq("id", photo.id);
+      if (photo.is_cover) {
+        const remaining = tourPhotos.filter(p => p.id !== photo.id);
+        if (remaining.length > 0) {
+          await setHeroPhoto(remaining[0]);
+        } else {
+          setForm(f => ({ ...f, cover_url: "" }));
+          if (editTour) {
+            await supabase.from("tours").update({ cover_url: null }).eq("id", editTour.id);
+          }
+        }
+      }
+    }
+
+    setTourPhotos(prev => prev.filter(p => p.id !== photo.id));
+    toast.success("Photo deleted");
   };
 
   const saveTour = async () => {
@@ -108,29 +198,41 @@ const ToursPage = () => {
 
     setSaving(true);
     const payload = {
-      operator_id:     operator.id,
-      title:           form.title.trim(),
-      description:     form.description.trim(),
-      type:            form.type,
+      operator_id:      operator.id,
+      title:            form.title.trim(),
+      description:      form.description.trim(),
+      type:             form.type,
       price_per_person: parseFloat(form.price_per_person),
-      duration_hours:  form.duration_hours ? parseFloat(form.duration_hours) : null,
-      max_group_size:  parseInt(form.max_group_size),
-      min_group_size:  parseInt(form.min_group_size),
-      meeting_point:   form.meeting_point.trim(),
-      includes:        form.includes ? form.includes.split("\n").filter(Boolean) : [],
-      excludes:        form.excludes ? form.excludes.split("\n").filter(Boolean) : [],
-      languages:       form.languages,
-      city_id:         form.city_id,
-      cover_url:       form.cover_url || null,
-      status:          "pending",
+      duration_hours:   form.duration_hours ? parseFloat(form.duration_hours) : null,
+      max_group_size:   parseInt(form.max_group_size),
+      min_group_size:   parseInt(form.min_group_size),
+      meeting_point:    form.meeting_point.trim(),
+      includes:         form.includes ? form.includes.split("\n").filter(Boolean) : [],
+      excludes:         form.excludes ? form.excludes.split("\n").filter(Boolean) : [],
+      languages:        form.languages,
+      city_id:          form.city_id,
+      cover_url:        form.cover_url || null,
+      status:           "pending",
     };
 
-    const { error } = editTour
-      ? await supabase.from("tours").update(payload).eq("id", editTour.id)
-      : await supabase.from("tours").insert(payload);
+    const { data: savedTour, error } = editTour
+      ? await supabase.from("tours").update(payload).eq("id", editTour.id).select().single()
+      : await supabase.from("tours").insert(payload).select().single();
+
+    if (error) { setSaving(false); return toast.error(error.message); }
+
+    // For new tours, persist any temp photos to tour_photos table
+    if (!editTour && savedTour && tourPhotos.length > 0) {
+      const rows = tourPhotos.map((p, i) => ({
+        tour_id: savedTour.id,
+        url: p.url,
+        is_cover: i === 0,
+        display_order: i,
+      }));
+      await supabase.from("tour_photos").insert(rows);
+    }
 
     setSaving(false);
-    if (error) return toast.error(error.message);
     toast.success(editTour ? "Tour updated!" : "Tour submitted for review!");
     setView("list");
     setEditTour(null);
@@ -140,22 +242,24 @@ const ToursPage = () => {
 
   const startEdit = (tour) => {
     setForm({
-      title:           tour.title || "",
-      description:     tour.description || "",
-      type:            tour.type || "tour",
+      title:            tour.title || "",
+      description:      tour.description || "",
+      type:             tour.type || "tour",
       price_per_person: tour.price_per_person || "",
-      duration_hours:  tour.duration_hours || "",
-      max_group_size:  tour.max_group_size || 12,
-      min_group_size:  tour.min_group_size || 1,
-      meeting_point:   tour.meeting_point || "",
-      includes:        (tour.includes || []).join("\n"),
-      excludes:        (tour.excludes || []).join("\n"),
-      languages:       tour.languages || ["English"],
-      city_id:         tour.city_id || "",
-      cover_url:       tour.cover_url || "",
+      duration_hours:   tour.duration_hours || "",
+      max_group_size:   tour.max_group_size || 12,
+      min_group_size:   tour.min_group_size || 1,
+      meeting_point:    tour.meeting_point || "",
+      includes:         (tour.includes || []).join("\n"),
+      excludes:         (tour.excludes || []).join("\n"),
+      languages:        tour.languages || ["English"],
+      city_id:          tour.city_id || "",
+      cover_url:        tour.cover_url || "",
     });
     setEditTour(tour);
+    setFormTab("details");
     setView("edit");
+    loadTourPhotos(tour.id);
   };
 
   const deleteTour = async (id) => {
@@ -216,7 +320,7 @@ const ToursPage = () => {
                 {tours.length} total · {tours.filter(t => t.status === "live").length} live
               </p>
             </div>
-            <button onClick={() => { resetForm(); setView("create"); }} style={{
+            <button onClick={() => { resetForm(); setTourPhotos([]); setView("create"); }} style={{
               background: "var(--olive)", color: "white", border: "none",
               borderRadius: 10, padding: "10px 20px",
               fontSize: 14, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
@@ -239,7 +343,7 @@ const ToursPage = () => {
               <p style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 20 }}>
                 Create your first tour listing to start receiving bookings.
               </p>
-              <button onClick={() => setView("create")} style={{
+              <button onClick={() => { resetForm(); setView("create"); }} style={{
                 background: "var(--olive)", color: "white", border: "none",
                 borderRadius: 10, padding: "10px 20px",
                 fontSize: 14, fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
@@ -316,7 +420,7 @@ const ToursPage = () => {
       {(view === "create" || view === "edit") && (
         <>
           <div style={{ marginBottom: 24 }}>
-            <button onClick={() => { setView("list"); setEditTour(null); }} style={{
+            <button onClick={() => { setView("list"); setEditTour(null); setFormTab("details"); }} style={{
               background: "none", border: "none", cursor: "pointer",
               fontSize: 13, color: "var(--text-secondary)",
               marginBottom: 12, padding: 0, fontFamily: "inherit",
@@ -332,204 +436,295 @@ const ToursPage = () => {
             background: "var(--white)", border: "0.5px solid var(--border)",
             borderRadius: 16, overflow: "hidden",
           }}>
-            <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
 
-              {/* Cover photo */}
-              <div>
-                <label style={lbl}>Cover photo</label>
-                <div
-                  onClick={() => coverInputRef.current?.click()}
-                  style={{
-                    width: "100%", height: 200,
-                    borderRadius: 10, overflow: "hidden",
-                    border: "0.5px dashed var(--border)",
-                    background: form.cover_url ? "transparent" : "var(--bg)",
-                    display: "flex", alignItems: "center",
-                    justifyContent: "center", cursor: "pointer",
-                    position: "relative", marginBottom: 8,
-                  }}
-                >
-                  {form.cover_url ? (
-                    <>
-                      <img
-                        src={form.cover_url}
-                        alt="Cover"
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      />
-                      <div
-                        style={{
-                          position: "absolute", inset: 0,
-                          background: "rgba(0,0,0,0.4)",
-                          display: "flex", alignItems: "center",
-                          justifyContent: "center", opacity: 0,
-                          transition: "opacity 0.2s",
-                          color: "white", fontSize: 13, fontWeight: 500,
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
-                        onMouseLeave={e => { e.currentTarget.style.opacity = 0; }}
-                      >
-                        Change photo
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ textAlign: "center", color: "var(--text-tertiary)" }}>
-                      <div style={{ fontSize: 32, marginBottom: 8 }}>📷</div>
-                      <div style={{ fontSize: 13 }}>
-                        {uploading ? "Uploading…" : "Click to upload cover photo"}
-                      </div>
-                      <div style={{ fontSize: 11, marginTop: 4 }}>
-                        JPG, PNG or WebP · Max 5MB
-                      </div>
-                    </div>
-                  )}
+            {/* Tab bar */}
+            <div style={{
+              display: "flex", borderBottom: "0.5px solid var(--border)",
+              background: "var(--bg)",
+            }}>
+              {[
+                { id: "details", label: "Details" },
+                { id: "photos",  label: `Photos (${tourPhotos.length})` },
+              ].map(tab => (
+                <button key={tab.id} onClick={() => setFormTab(tab.id)} style={{
+                  padding: "14px 20px", fontSize: 14, fontWeight: 500,
+                  background: "none", border: "none", cursor: "pointer",
+                  borderBottom: formTab === tab.id
+                    ? "2px solid #5a6e1f" : "2px solid transparent",
+                  color: formTab === tab.id
+                    ? "var(--text-primary)" : "var(--text-secondary)",
+                  marginBottom: -1, fontFamily: "inherit",
+                }}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* ── DETAILS TAB ── */}
+            {formTab === "details" && (
+              <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+
+                {/* Title */}
+                <div>
+                  <label style={lbl}>Tour title *</label>
+                  <input value={form.title} onChange={set("title")}
+                    placeholder="e.g. Samarkand Full Day Tour" style={inp} />
                 </div>
-                <input
-                  ref={coverInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleCoverUpload}
-                  style={{ display: "none" }}
-                />
-                {form.cover_url && (
+
+                {/* Type + City */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div>
+                    <label style={lbl}>Type *</label>
+                    <select value={form.type} onChange={set("type")}
+                      style={{ ...inp, background: "var(--white)" }}>
+                      {TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={lbl}>City *</label>
+                    <select value={form.city_id} onChange={set("city_id")}
+                      style={{ ...inp, background: "var(--white)" }}>
+                      <option value="">Select city</option>
+                      {CITIES.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Price + Duration + Max group */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+                  <div>
+                    <label style={lbl}>Price per person (USD) *</label>
+                    <input type="number" min="0" value={form.price_per_person}
+                      onChange={set("price_per_person")} placeholder="45" style={inp} />
+                  </div>
+                  <div>
+                    <label style={lbl}>Duration (hours)</label>
+                    <input type="number" min="0.5" step="0.5" value={form.duration_hours}
+                      onChange={set("duration_hours")} placeholder="8" style={inp} />
+                  </div>
+                  <div>
+                    <label style={lbl}>Max group size</label>
+                    <input type="number" min="1" value={form.max_group_size}
+                      onChange={set("max_group_size")} style={inp} />
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label style={lbl}>Description *</label>
+                  <textarea value={form.description} onChange={set("description")}
+                    placeholder="Describe the tour in detail — what travelers will see and do, highlights, what to bring..."
+                    rows={5}
+                    style={{ ...inp, resize: "vertical", lineHeight: 1.5 }} />
+                </div>
+
+                {/* Meeting point */}
+                <div>
+                  <label style={lbl}>Meeting point</label>
+                  <input value={form.meeting_point} onChange={set("meeting_point")}
+                    placeholder="e.g. Registan Square main entrance" style={inp} />
+                </div>
+
+                {/* Includes / Excludes */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div>
+                    <label style={lbl}>What's included (one per line)</label>
+                    <textarea value={form.includes} onChange={set("includes")}
+                      placeholder={"Hotel pickup\nGuide\nLunch\nEntrance fees"}
+                      rows={4}
+                      style={{ ...inp, fontSize: 13, resize: "vertical" }} />
+                  </div>
+                  <div>
+                    <label style={lbl}>What's excluded (one per line)</label>
+                    <textarea value={form.excludes} onChange={set("excludes")}
+                      placeholder={"Flights\nPersonal expenses\nTips"}
+                      rows={4}
+                      style={{ ...inp, fontSize: 13, resize: "vertical" }} />
+                  </div>
+                </div>
+
+                {/* Languages */}
+                <div>
+                  <label style={lbl}>Languages available</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {LANGUAGES.map(lang => (
+                      <button key={lang} type="button" onClick={() => toggleLanguage(lang)}
+                        style={{
+                          padding: "6px 14px", borderRadius: 20, fontSize: 13,
+                          cursor: "pointer", border: "0.5px solid", fontFamily: "inherit",
+                          borderColor: form.languages.includes(lang) ? "var(--olive)" : "var(--border)",
+                          background: form.languages.includes(lang) ? "var(--olive)" : "transparent",
+                          color: form.languages.includes(lang) ? "white" : "var(--text-secondary)",
+                        }}>
+                        {lang}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 12, paddingTop: 8 }}>
+                  <button onClick={saveTour} disabled={saving} style={{
+                    flex: 1, padding: "13px",
+                    background: saving ? "#9aad6f" : "var(--olive)",
+                    color: "white", border: "none", borderRadius: 10,
+                    fontSize: 15, fontWeight: 500,
+                    cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit",
+                  }}>
+                    {saving ? "Saving…" : view === "edit" ? "Save changes" : "Submit for review"}
+                  </button>
+                  <button onClick={() => { setView("list"); setEditTour(null); setFormTab("details"); }} style={{
+                    padding: "13px 20px", background: "transparent",
+                    border: "0.5px solid var(--border)", borderRadius: 10,
+                    fontSize: 14, cursor: "pointer",
+                    color: "var(--text-secondary)", fontFamily: "inherit",
+                  }}>
+                    Cancel
+                  </button>
+                </div>
+
+                <p style={{ fontSize: 12, color: "var(--text-tertiary)", textAlign: "center" }}>
+                  New tours are reviewed by Triply before going live.
+                  This usually takes 1 business day.
+                </p>
+
+              </div>
+            )}
+
+            {/* ── PHOTOS TAB ── */}
+            {formTab === "photos" && (
+              <div style={{ padding: 24 }}>
+
+                {/* Header */}
+                <div style={{
+                  display: "flex", justifyContent: "space-between",
+                  alignItems: "center", marginBottom: 20,
+                }}>
+                  <div>
+                    <h3 style={{ fontSize: 15, fontWeight: 500 }}>
+                      Photos ({tourPhotos.length})
+                    </h3>
+                    <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 3 }}>
+                      First photo is used as cover. Click "Set Hero" to change.
+                    </p>
+                  </div>
                   <button
-                    type="button"
-                    onClick={() => setForm(f => ({ ...f, cover_url: "" }))}
+                    onClick={() => photoInputRef.current?.click()}
+                    disabled={uploading}
                     style={{
-                      fontSize: 12, color: "var(--red)",
-                      background: "none", border: "none",
-                      cursor: "pointer", padding: 0, fontFamily: "inherit",
+                      background: "var(--olive)", color: "white",
+                      border: "none", borderRadius: 8,
+                      padding: "9px 18px", fontSize: 13, fontWeight: 500,
+                      cursor: uploading ? "not-allowed" : "pointer",
+                      opacity: uploading ? 0.7 : 1, fontFamily: "inherit",
                     }}
                   >
-                    Remove photo
+                    {uploading ? "Uploading…" : "+ Upload Photos"}
                   </button>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handlePhotoUpload}
+                    style={{ display: "none" }}
+                  />
+                </div>
+
+                {/* Photo grid */}
+                {photosLoading ? (
+                  <div style={{ textAlign: "center", padding: 40, color: "var(--text-tertiary)" }}>
+                    Loading photos…
+                  </div>
+                ) : tourPhotos.length === 0 ? (
+                  <div
+                    onClick={() => photoInputRef.current?.click()}
+                    style={{
+                      border: "0.5px dashed var(--border)",
+                      borderRadius: 12, padding: 48,
+                      textAlign: "center", cursor: "pointer",
+                      color: "var(--text-tertiary)",
+                    }}
+                  >
+                    <div style={{ fontSize: 36, marginBottom: 12 }}>📷</div>
+                    <div style={{ fontSize: 14 }}>Click to upload your first photo</div>
+                    <div style={{ fontSize: 12, marginTop: 4 }}>
+                      JPG, PNG or WebP · Max 5MB each · Multiple allowed
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                    gap: 12,
+                  }}>
+                    {tourPhotos.map(photo => (
+                      <div key={photo.id} style={{
+                        border: photo.is_cover
+                          ? "2px solid var(--olive)"
+                          : "0.5px solid var(--border)",
+                        borderRadius: 10, overflow: "hidden",
+                        position: "relative",
+                      }}>
+                        {photo.is_cover && (
+                          <div style={{
+                            position: "absolute", top: 8, left: 8,
+                            background: "var(--olive)", color: "white",
+                            fontSize: 10, fontWeight: 600,
+                            padding: "2px 8px", borderRadius: 20, zIndex: 1,
+                          }}>
+                            Hero
+                          </div>
+                        )}
+                        <img
+                          src={photo.url}
+                          alt=""
+                          style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }}
+                        />
+                        <div style={{ padding: "8px", display: "flex", gap: 6, background: "white" }}>
+                          {!photo.is_cover && (
+                            <button
+                              onClick={() => setHeroPhoto(photo)}
+                              style={{
+                                flex: 1, padding: "5px 0", fontSize: 11, fontWeight: 500,
+                                border: "0.5px solid var(--border)", borderRadius: 6,
+                                cursor: "pointer", background: "transparent",
+                                color: "var(--text-primary)", fontFamily: "inherit",
+                              }}
+                            >
+                              Set Hero
+                            </button>
+                          )}
+                          <button
+                            onClick={() => deletePhoto(photo)}
+                            style={{
+                              flex: 1, padding: "5px 0", fontSize: 11, fontWeight: 500,
+                              border: "0.5px solid #fca5a5", borderRadius: 6,
+                              cursor: "pointer", background: "var(--red-light)",
+                              color: "var(--red)", fontFamily: "inherit",
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Note for new tours */}
+                {!editTour && tourPhotos.length > 0 && (
+                  <div style={{
+                    marginTop: 16, padding: "10px 14px",
+                    background: "var(--olive-light)", borderRadius: 8,
+                    fontSize: 12, color: "var(--olive-dark)",
+                  }}>
+                    ℹ Photos will be saved when you submit the tour in the Details tab.
+                  </div>
                 )}
               </div>
+            )}
 
-              {/* Title */}
-              <div>
-                <label style={lbl}>Tour title *</label>
-                <input value={form.title} onChange={set("title")}
-                  placeholder="e.g. Samarkand Full Day Tour" style={inp} />
-              </div>
-
-              {/* Type + City */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                <div>
-                  <label style={lbl}>Type *</label>
-                  <select value={form.type} onChange={set("type")}
-                    style={{ ...inp, background: "var(--white)" }}>
-                    {TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={lbl}>City *</label>
-                  <select value={form.city_id} onChange={set("city_id")}
-                    style={{ ...inp, background: "var(--white)" }}>
-                    <option value="">Select city</option>
-                    {CITIES.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Price + Duration + Max group */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
-                <div>
-                  <label style={lbl}>Price per person (USD) *</label>
-                  <input type="number" min="0" value={form.price_per_person}
-                    onChange={set("price_per_person")} placeholder="45" style={inp} />
-                </div>
-                <div>
-                  <label style={lbl}>Duration (hours)</label>
-                  <input type="number" min="0.5" step="0.5" value={form.duration_hours}
-                    onChange={set("duration_hours")} placeholder="8" style={inp} />
-                </div>
-                <div>
-                  <label style={lbl}>Max group size</label>
-                  <input type="number" min="1" value={form.max_group_size}
-                    onChange={set("max_group_size")} style={inp} />
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label style={lbl}>Description *</label>
-                <textarea value={form.description} onChange={set("description")}
-                  placeholder="Describe the tour in detail — what travelers will see and do, highlights, what to bring..."
-                  rows={5}
-                  style={{ ...inp, resize: "vertical", lineHeight: 1.5 }} />
-              </div>
-
-              {/* Meeting point */}
-              <div>
-                <label style={lbl}>Meeting point</label>
-                <input value={form.meeting_point} onChange={set("meeting_point")}
-                  placeholder="e.g. Registan Square main entrance" style={inp} />
-              </div>
-
-              {/* Includes / Excludes */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                <div>
-                  <label style={lbl}>What's included (one per line)</label>
-                  <textarea value={form.includes} onChange={set("includes")}
-                    placeholder={"Hotel pickup\nGuide\nLunch\nEntrance fees"}
-                    rows={4}
-                    style={{ ...inp, fontSize: 13, resize: "vertical" }} />
-                </div>
-                <div>
-                  <label style={lbl}>What's excluded (one per line)</label>
-                  <textarea value={form.excludes} onChange={set("excludes")}
-                    placeholder={"Flights\nPersonal expenses\nTips"}
-                    rows={4}
-                    style={{ ...inp, fontSize: 13, resize: "vertical" }} />
-                </div>
-              </div>
-
-              {/* Languages */}
-              <div>
-                <label style={lbl}>Languages available</label>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {LANGUAGES.map(lang => (
-                    <button key={lang} type="button" onClick={() => toggleLanguage(lang)}
-                      style={{
-                        padding: "6px 14px", borderRadius: 20, fontSize: 13,
-                        cursor: "pointer", border: "0.5px solid", fontFamily: "inherit",
-                        borderColor: form.languages.includes(lang) ? "var(--olive)" : "var(--border)",
-                        background: form.languages.includes(lang) ? "var(--olive)" : "transparent",
-                        color: form.languages.includes(lang) ? "white" : "var(--text-secondary)",
-                      }}>
-                      {lang}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div style={{ display: "flex", gap: 12, paddingTop: 8 }}>
-                <button onClick={saveTour} disabled={saving} style={{
-                  flex: 1, padding: "13px",
-                  background: saving ? "#9aad6f" : "var(--olive)",
-                  color: "white", border: "none", borderRadius: 10,
-                  fontSize: 15, fontWeight: 500,
-                  cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit",
-                }}>
-                  {saving ? "Saving…" : view === "edit" ? "Save changes" : "Submit for review"}
-                </button>
-                <button onClick={() => { setView("list"); setEditTour(null); }} style={{
-                  padding: "13px 20px", background: "transparent",
-                  border: "0.5px solid var(--border)", borderRadius: 10,
-                  fontSize: 14, cursor: "pointer",
-                  color: "var(--text-secondary)", fontFamily: "inherit",
-                }}>
-                  Cancel
-                </button>
-              </div>
-
-              <p style={{ fontSize: 12, color: "var(--text-tertiary)", textAlign: "center" }}>
-                New tours are reviewed by Triply before going live.
-                This usually takes 1 business day.
-              </p>
-
-            </div>
           </div>
         </>
       )}
