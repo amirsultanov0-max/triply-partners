@@ -35,7 +35,10 @@ const EMPTY_FORM = {
   additional_info: [],
   accessibility: [],
   what_to_bring: [],
+  booking_type: "request",
 };
+
+const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
 const inp = {
   width: "100%", padding: "10px 14px",
@@ -63,6 +66,11 @@ const ToursPage = () => {
   const [photosLoading, setPhotosLoading] = useState(false);
   const photoInputRef = useRef(null);
   const [newStop, setNewStop] = useState({ title: "", description: "", duration: "" });
+  const [availability, setAvailability] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [newSlot, setNewSlot] = useState({ date: "", start_time: "09:00", total_spots: 12, price_override: "" });
+  const [newSchedule, setNewSchedule] = useState({ day_of_week: 1, start_time: "09:00", total_spots: 12, valid_from: "", valid_until: "" });
 
   const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -83,6 +91,26 @@ const ToursPage = () => {
     setForm(EMPTY_FORM);
     setFormTab("details");
     setTourPhotos([]);
+    setAvailability([]);
+    setSchedules([]);
+  };
+
+  const loadAvailability = async (tourId) => {
+    setAvailLoading(true);
+    const [{ data: avail }, { data: scheds }] = await Promise.all([
+      supabase.from("tour_availability")
+        .select("*")
+        .eq("tour_id", tourId)
+        .gte("date", new Date().toISOString().split("T")[0])
+        .order("date", { ascending: true }),
+      supabase.from("tour_schedules")
+        .select("*")
+        .eq("tour_id", tourId)
+        .order("day_of_week", { ascending: true }),
+    ]);
+    setAvailability(avail || []);
+    setSchedules(scheds || []);
+    setAvailLoading(false);
   };
 
   const loadTourPhotos = async (tourId) => {
@@ -223,6 +251,7 @@ const ToursPage = () => {
       additional_info:     form.additional_info.filter(Boolean),
       accessibility:       form.accessibility.filter(Boolean),
       what_to_bring:       form.what_to_bring.filter(Boolean),
+      booking_type:        form.booking_type,
       status:              "pending",
     };
 
@@ -271,11 +300,13 @@ const ToursPage = () => {
       additional_info:     tour.additional_info || [],
       accessibility:       tour.accessibility || [],
       what_to_bring:       tour.what_to_bring || [],
+      booking_type:        tour.booking_type || "request",
     });
     setEditTour(tour);
     setFormTab("details");
     setView("edit");
     loadTourPhotos(tour.id);
+    loadAvailability(tour.id);
   };
 
   const deleteTour = async (id) => {
@@ -284,6 +315,61 @@ const ToursPage = () => {
     if (error) return toast.error(error.message);
     toast.success("Tour deleted");
     loadTours();
+  };
+
+  const addSlot = async () => {
+    if (!newSlot.date) return toast.error("Select a date");
+    if (!editTour) return toast.error("Save the tour first, then add availability");
+    const { data, error } = await supabase
+      .from("tour_availability")
+      .insert({
+        tour_id: editTour.id,
+        date: newSlot.date,
+        start_time: newSlot.start_time,
+        total_spots: parseInt(newSlot.total_spots),
+        price_override: newSlot.price_override ? parseFloat(newSlot.price_override) : null,
+        status: "active",
+      })
+      .select()
+      .single();
+    if (error) return toast.error(error.message);
+    setAvailability(prev => [...prev, data].sort((a, b) => a.date.localeCompare(b.date)));
+    setNewSlot({ date: "", start_time: "09:00", total_spots: 12, price_override: "" });
+    toast.success("Date added ✓");
+  };
+
+  const removeSlot = async (id) => {
+    await supabase.from("tour_availability").delete().eq("id", id);
+    setAvailability(prev => prev.filter(s => s.id !== id));
+    toast.success("Date removed");
+  };
+
+  const addSchedule = async () => {
+    if (!editTour) return toast.error("Save the tour first");
+    if (!newSchedule.valid_from) return toast.error("Set a start date");
+    const { data, error } = await supabase
+      .from("tour_schedules")
+      .insert({
+        tour_id: editTour.id,
+        day_of_week: parseInt(newSchedule.day_of_week),
+        start_time: newSchedule.start_time,
+        total_spots: parseInt(newSchedule.total_spots),
+        valid_from: newSchedule.valid_from,
+        valid_until: newSchedule.valid_until || null,
+        active: true,
+      })
+      .select()
+      .single();
+    if (error) return toast.error(error.message);
+    setSchedules(prev => [...prev, data]);
+    setNewSchedule({ day_of_week: 1, start_time: "09:00", total_spots: 12, valid_from: "", valid_until: "" });
+    toast.success("Schedule added ✓");
+  };
+
+  const removeSchedule = async (id) => {
+    await supabase.from("tour_schedules").delete().eq("id", id);
+    setSchedules(prev => prev.filter(s => s.id !== id));
+    toast.success("Schedule removed");
   };
 
   const toggleStatus = async (tour) => {
@@ -459,8 +545,9 @@ const ToursPage = () => {
               background: "var(--bg)",
             }}>
               {[
-                { id: "details", label: "Details" },
-                { id: "photos",  label: `Photos (${tourPhotos.length})` },
+                { id: "details",      label: "Details" },
+                { id: "photos",       label: `Photos (${tourPhotos.length})` },
+                { id: "availability", label: `Availability (${availability.length + schedules.length})` },
               ].map(tab => (
                 <button key={tab.id} onClick={() => setFormTab(tab.id)} style={{
                   padding: "14px 20px", fontSize: 14, fontWeight: 500,
@@ -485,6 +572,34 @@ const ToursPage = () => {
                   <label style={lbl}>Tour title *</label>
                   <input value={form.title} onChange={set("title")}
                     placeholder="e.g. Samarkand Full Day Tour" style={inp} />
+                </div>
+
+                {/* Booking type */}
+                <div>
+                  <label style={lbl}>Booking type</label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { id: "request", label: "Request to book", sub: "You confirm each booking manually" },
+                      { id: "instant", label: "Instant booking",  sub: "Auto-confirmed when paid" },
+                    ].map(bt => (
+                      <div
+                        key={bt.id}
+                        onClick={() => setForm(f => ({ ...f, booking_type: bt.id }))}
+                        style={{
+                          flex: 1, padding: "12px 14px", borderRadius: 8, cursor: "pointer",
+                          border: `1.5px solid ${form.booking_type === bt.id ? "var(--olive)" : "var(--border)"}`,
+                          background: form.booking_type === bt.id ? "var(--olive-light)" : "transparent",
+                        }}
+                      >
+                        <div style={{ fontSize: 13, fontWeight: 500, color: form.booking_type === bt.id ? "var(--olive-dark)" : "var(--text-primary)" }}>
+                          {bt.label}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                          {bt.sub}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Type + City */}
@@ -776,6 +891,174 @@ const ToursPage = () => {
             )}
 
             {/* ── PHOTOS TAB ── */}
+            {/* ── AVAILABILITY TAB ── */}
+            {formTab === "availability" && (
+              <div style={{ padding: 24 }}>
+
+                {!editTour && (
+                  <div style={{
+                    background: "var(--olive-light)", borderRadius: 10,
+                    padding: "12px 16px", marginBottom: 20,
+                    fontSize: 13, color: "var(--olive-dark)",
+                  }}>
+                    ℹ Save the tour in the Details tab first, then come back to add availability.
+                  </div>
+                )}
+
+                {/* SPECIFIC DATES */}
+                <div style={{ marginBottom: 32 }}>
+                  <h3 style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>Specific dates</h3>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 16 }}>
+                    Add individual dates when this tour runs.
+                  </p>
+
+                  {availability.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      {availability.map(slot => (
+                        <div key={slot.id} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          padding: "10px 14px", marginBottom: 6,
+                          background: "var(--bg)", borderRadius: 8,
+                          border: "0.5px solid var(--border)", fontSize: 13,
+                        }}>
+                          <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                            <span style={{ fontWeight: 500 }}>
+                              {new Date(slot.date + "T00:00:00").toLocaleDateString("en-GB", {
+                                weekday: "short", day: "numeric", month: "short", year: "numeric",
+                              })}
+                            </span>
+                            <span style={{ color: "var(--text-secondary)" }}>🕐 {slot.start_time.slice(0, 5)}</span>
+                            <span style={{ color: "var(--text-secondary)" }}>👥 {slot.booked_spots || 0}/{slot.total_spots} spots</span>
+                            {slot.price_override && (
+                              <span style={{ color: "var(--olive)", fontWeight: 500 }}>${slot.price_override}</span>
+                            )}
+                          </div>
+                          <button onClick={() => removeSlot(slot.id)} style={{
+                            background: "none", border: "none", cursor: "pointer",
+                            color: "var(--red)", fontSize: 16, padding: 0,
+                          }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {editTour && (
+                    <div style={{ border: "0.5px dashed var(--border)", borderRadius: 8, padding: 14 }}>
+                      <div style={{
+                        display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr",
+                        gap: 8, marginBottom: 8,
+                      }}>
+                        {[
+                          { label: "Date *",              type: "date",   key: "date",           min: new Date().toISOString().split("T")[0] },
+                          { label: "Start time",          type: "time",   key: "start_time" },
+                          { label: "Total spots",         type: "number", key: "total_spots",    min: "1" },
+                          { label: "Price override ($)",  type: "number", key: "price_override", min: "0", placeholder: "Leave blank = default" },
+                        ].map(({ label, type, key, min, placeholder }) => (
+                          <div key={key}>
+                            <label style={{ fontSize: 11, fontWeight: 500, display: "block", marginBottom: 4 }}>{label}</label>
+                            <input
+                              type={type} min={min} placeholder={placeholder}
+                              value={newSlot[key]}
+                              onChange={e => setNewSlot(s => ({ ...s, [key]: e.target.value }))}
+                              style={{ width: "100%", padding: "8px 10px", border: "0.5px solid var(--border)",
+                                borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={addSlot} style={{
+                        padding: "8px 18px", background: "var(--olive)", color: "white",
+                        border: "none", borderRadius: 6, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                      }}>+ Add date</button>
+                    </div>
+                  )}
+                </div>
+
+                {/* RECURRING SCHEDULE */}
+                <div>
+                  <h3 style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>Recurring schedule</h3>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 16 }}>
+                    Set days of the week this tour runs regularly.
+                  </p>
+
+                  {schedules.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      {schedules.map(sched => (
+                        <div key={sched.id} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          padding: "10px 14px", marginBottom: 6,
+                          background: "var(--bg)", borderRadius: 8,
+                          border: "0.5px solid var(--border)", fontSize: 13,
+                        }}>
+                          <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                            <span style={{
+                              fontWeight: 500, background: "var(--olive-light)",
+                              color: "var(--olive-dark)", padding: "2px 10px",
+                              borderRadius: 20, fontSize: 12,
+                            }}>
+                              {DAYS[sched.day_of_week]}
+                            </span>
+                            <span style={{ color: "var(--text-secondary)" }}>🕐 {sched.start_time.slice(0, 5)}</span>
+                            <span style={{ color: "var(--text-secondary)" }}>👥 {sched.total_spots} spots</span>
+                            <span style={{ color: "var(--text-tertiary)", fontSize: 12 }}>
+                              From {sched.valid_from}{sched.valid_until ? ` → ${sched.valid_until}` : " onwards"}
+                            </span>
+                          </div>
+                          <button onClick={() => removeSchedule(sched.id)} style={{
+                            background: "none", border: "none", cursor: "pointer",
+                            color: "var(--red)", fontSize: 16, padding: 0,
+                          }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {editTour && (
+                    <div style={{ border: "0.5px dashed var(--border)", borderRadius: 8, padding: 14 }}>
+                      <div style={{
+                        display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr",
+                        gap: 8, marginBottom: 8,
+                      }}>
+                        <div>
+                          <label style={{ fontSize: 11, fontWeight: 500, display: "block", marginBottom: 4 }}>Day *</label>
+                          <select
+                            value={newSchedule.day_of_week}
+                            onChange={e => setNewSchedule(s => ({ ...s, day_of_week: e.target.value }))}
+                            style={{ width: "100%", padding: "8px 10px", border: "0.5px solid var(--border)",
+                              borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box",
+                              background: "var(--white)", fontFamily: "inherit" }}
+                          >
+                            {DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                          </select>
+                        </div>
+                        {[
+                          { label: "Time",        type: "time",   key: "start_time" },
+                          { label: "Spots",       type: "number", key: "total_spots", min: "1" },
+                          { label: "From date *", type: "date",   key: "valid_from" },
+                          { label: "Until date",  type: "date",   key: "valid_until" },
+                        ].map(({ label, type, key, min }) => (
+                          <div key={key}>
+                            <label style={{ fontSize: 11, fontWeight: 500, display: "block", marginBottom: 4 }}>{label}</label>
+                            <input
+                              type={type} min={min}
+                              value={newSchedule[key]}
+                              onChange={e => setNewSchedule(s => ({ ...s, [key]: e.target.value }))}
+                              style={{ width: "100%", padding: "8px 10px", border: "0.5px solid var(--border)",
+                                borderRadius: 6, fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={addSchedule} style={{
+                        padding: "8px 18px", background: "var(--olive)", color: "white",
+                        border: "none", borderRadius: 6, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                      }}>+ Add recurring day</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {formTab === "photos" && (
               <div style={{ padding: 24 }}>
 
