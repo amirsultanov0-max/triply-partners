@@ -20,6 +20,7 @@ const Layout = ({ children }) => {
         display: "flex", alignItems: "center",
         justifyContent: "space-between",
         padding: "0 24px", zIndex: 100,
+        position: "relative",
       }}>
         {/* Logo */}
         <Link to="/" style={{
@@ -32,15 +33,24 @@ const Layout = ({ children }) => {
           }}>Partners</span>
         </Link>
 
+        {/* Centered company name */}
+        {operator && (
+          <span style={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            fontSize: 13,
+            fontWeight: 500,
+            color: "var(--text-secondary)",
+          }}>
+            {operator.company_name}
+          </span>
+        )}
+
         {/* Right side */}
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {user ? (
             <>
-              {operator && (
-                <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-                  {operator.company_name}
-                </span>
-              )}
               <Link to="/dashboard" style={{
                 fontSize: 13, fontWeight: 500,
                 color: "var(--text-primary)",
